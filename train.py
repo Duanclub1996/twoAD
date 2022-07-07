@@ -56,7 +56,7 @@ def adjust_learning_rate(optimizer, epoch, lr_, logger):
         logger.debug('Updating learning rate to {}'.format(lr))
 
 
-def model_train(model, optimizer, loss, device, train_loader, logger, n):
+def model_train(model, optimizer1,optimizer2, loss, device, train_loader, logger, n):
     rec1 = []
     rec2 = []
 
@@ -65,22 +65,29 @@ def model_train(model, optimizer, loss, device, train_loader, logger, n):
     iter_start = time.time()
     for i, (input_data, labels) in enumerate(train_loader):
         iter_one_start = time.time()
-        optimizer.zero_grad()
+
         input_data = input_data.float().to(device)
-        dec_out1, dec_out2 = model(input_data)
+        dec_out1, dec_out2, dec_out3 = model(input_data)
         rec_loss1 = loss(input_data, dec_out1)
-        rec_loss2 = loss(input_data, dec_out2)
+        rec_loss2 = loss(input_data, dec_out3)
         ######################################################
         loss1 = (1 / n) * rec_loss1 + (1 - 1 / n) * rec_loss2
-        loss2 = (1 / n) * rec_loss1 - (1 - 1 / n) * rec_loss2
+        loss1.backward()
+        optimizer1.step()
+        optimizer1.zero_grad()
+
+        dec_out1, dec_out2, dec_out3 = model(input_data)
+        rec_loss3 = loss(input_data, dec_out2)
+        rec_loss4 = loss(input_data, dec_out3)
+        loss2 = (1 / n) * rec_loss3 - (1 - 1 / n) * rec_loss4
+        loss2.backward()
+        optimizer2.step()
+        optimizer2.zero_grad()
+        ######################################################
         rec1.append(loss1.item())
         rec2.append(loss2.item())
-        loss1.backward(retain_graph=True)
-        loss2.backward()
-        optimizer.step()
-        ######################################################
         iter_one_end = time.time() - iter_one_start
-        if i % 5 == 0:
+        if i % 100 == 0:
             iter_end = time.time() - iter_start
             left_time = iter_one_end * (len(train_loader) - i)
             logger.debug(
@@ -93,17 +100,18 @@ def model_train(model, optimizer, loss, device, train_loader, logger, n):
     return rec1_res, rec2_res
 
 
-def model_evaluate(model, device, loss, val_loader,n):
+def model_evaluate(model, device, loss, val_loader, n):
     model.eval()
     total_rec1 = []
     total_rec2 = []
     for i, (input_data, _) in enumerate(tqdm(val_loader)):
         input_data = input_data.float().to(device)
-        dec_out1, dec_out2 ,dec_out3= model(input_data)
+        dec_out1, dec_out2, dec_out3 = model(input_data)
         rec1 = loss(input_data, dec_out1)
         rec2 = loss(input_data, dec_out2)
-        loss1 = (1 / n) * rec1 + (1 - 1 / n) * rec2
-        loss2 = (1 / n) * rec1 - (1 - 1 / n) * rec2
+        rec3 = loss(input_data, dec_out3)
+        loss1 = (1 / n) * rec1 + (1 - 1 / n) * rec3
+        loss2 = (1 / n) * rec2 - (1 - 1 / n) * rec3
         total_rec1.append(loss1.item())
         total_rec2.append(loss2.item())
     total_rec1 = torch.tensor(total_rec1).mean()
@@ -137,7 +145,10 @@ def train(epoch, model, model_save_path, device, train_loader, logger, val_loade
     logger.debug(f'model_save_path:{path}')
     loss = nn.MSELoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # optimizer1 = torch.optim.Adam((model.encoder.parameters()), lr=lr)
+    # optimizer2 = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer1 = torch.optim.Adam(list(model.encoder.parameters()) + list(model.decoder1.parameters()))
+    optimizer2 = torch.optim.Adam(list(model.encoder.parameters()) + list(model.decoder2.parameters()))
 
     early_stopping = EarlyStopping(patience=3, verbose=True, dataset_name=dataset_name, logger=logger,
                                    logger_name=logger_name)
@@ -148,15 +159,14 @@ def train(epoch, model, model_save_path, device, train_loader, logger, val_loade
     for i in range(epoch):
         logger.debug(f'====================Epoch:{i + 1}====================')
         train_start = time.time()
-        rec1, rec2 = model_train(model, optimizer, loss, device, train_loader, logger, n)
+        rec1, rec2 = model_train(model, optimizer1, optimizer2,loss, device, train_loader, logger, n)
         epoch_end = time.time() - train_start
         logger.debug(
             f'Epoch : {i + 1} | rec1 : {rec1:.4f} |rec1 : {rec1:.4f} '
             f'| cost_time : {int(epoch_end // 3600):d}时{int((epoch % 3600) // 60):d}分{(epoch_end % 3600) % 60:.2f}秒')
         total_rec1.append(rec1.item())
         total_rec2.append(rec2.item())
-        val_rec1, val_rec2 = model_evaluate(model, device, loss, val_loader,n)
-
+        val_rec1, val_rec2 = model_evaluate(model, device, loss, val_loader, n)
         val_total_rec1.append(val_rec1.item())
         val_total_rec2.append(val_rec2.item())
         train_one_end = time.time() - train_start
@@ -175,7 +185,8 @@ def train(epoch, model, model_save_path, device, train_loader, logger, val_loade
         loss_save(path, total_rec1, val_total_rec1, total_rec2, val_total_rec2)
 
 
-def test(model, model_save_path, dataset_name, logger, device, train_loader, thre_loader, anomaly_ratio, logger_name,a,b):
+def test(model, model_save_path, dataset_name, logger, device, train_loader, thre_loader, anomaly_ratio, logger_name, a,
+         b):
     path = model_save_path + f'{str(logger_name)}_{dataset_name}/'
     train_score_list = []
     test_labels = []
@@ -188,9 +199,9 @@ def test(model, model_save_path, dataset_name, logger, device, train_loader, thr
     for i, (input_data, labels) in enumerate(tqdm(train_loader)):
         input_data = input_data.float().to(device)
         model = model.to(device)
-        dec_out1,dec_out2 = model(input_data)
+        dec_out1, dec_out2, dec_out3 = model(input_data)
         ####################################################
-        final_score = score(input_data, dec_out1,dec_out2,a,b)
+        final_score = score(input_data, dec_out1, dec_out3, a, b)
         ####################################################
         train_score_list.append(final_score.detach().cpu().numpy())
     train_score = np.concatenate(train_score_list, axis=0).reshape(-1)
@@ -204,8 +215,8 @@ def test(model, model_save_path, dataset_name, logger, device, train_loader, thr
     test_score_list = []
     for i, (input_data, labels) in enumerate(tqdm(thre_loader)):
         input_data = input_data.float().to(device)
-        dec_out1,dec_out2 = model(input_data)
-        al_score = score(input_data, dec_out1,dec_out2,a,b)
+        dec_out1, dec_out2, dec_out3 = model(input_data)
+        al_score = score(input_data, dec_out1, dec_out3, a, b)
         test_labels.append(labels.detach().cpu().numpy())
         test_score_list.append(np.array(al_score.detach().cpu().numpy()))
     test_score = np.concatenate(test_score_list, axis=0).reshape(-1)

@@ -6,7 +6,6 @@ import math
 from math import sqrt
 import os
 from embedding import DataEmbedding
-from decoder_1 import TransformerDecoderLayer
 
 
 class TriangularCausalMask:
@@ -173,12 +172,12 @@ class tranModel(nn.Module):
         super(tranModel, self).__init__()
         self.encoder = AnomalyTransformer(win_size, enc_in, d_model, n_heads, e_layers, d_ff,
                                           dropout, activation)
-        self.projection = nn.Linear(d_model, c_out, bias=True)
-        self.decoder1 = nn.Sequential(nn.Linear(d_model, c_out), nn.Sigmoid())
+        self.decoder1 = nn.Linear(d_model, c_out, bias=True)
+        self.decoder2 = nn.Sequential(nn.Linear(d_model, c_out), nn.Sigmoid())
 
     def forward(self, x):
         enc_out = self.encoder(x)
-        dec_out_1 = self.projection(enc_out)
-        dec_out_2 = self.decoder1(enc_out)
-        dec_out_3 = self.decoder1(self.encoder(dec_out_1))
-        return dec_out_1, dec_out_2,dec_out_3
+        dec_out_1 = self.decoder1(enc_out)
+        dec_out_2 = self.decoder2(enc_out)
+        dec_out_3 = self.decoder2(self.encoder(dec_out_1))
+        return dec_out_1, dec_out_2, dec_out_3
